@@ -1,65 +1,38 @@
 // server.js
 const express = require('express');
-const bodyParser = require('body-parser');
 const fs = require('fs');
 const cors = require('cors');
 const app = express();
+const PORT = process.env.PORT || 5000;
 
+// Ścieżka do pliku z zamówieniami
 const ORDERS_FILE = './orders.json';
 
-// Middleware do obsługi CORS
+// Middleware
 app.use(cors());
-
-// Middleware do parsowania JSON
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Funkcja do zapisywania zamówień
-const saveOrders = (orders) => {
-  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
-};
-
-// Endpoint do odbierania webhooków z Shoper
-app.post('/api/webhook/orders', (req, res) => {
-  try {
-    // Logowanie nagłówków i treści żądania
-    console.log('Nagłówki żądania:', req.headers);
-    console.log('Treść żądania:', req.body);
-
-    // Walidacja JSON - czy body nie jest puste
-    if (!req.body || Object.keys(req.body).length === 0) {
-      console.log('Puste żądanie otrzymane');
-      return res.status(400).send('Brak danych w żądaniu');
-    }
-
-    const orderData = req.body;
-
-    // Wczytanie istniejących zamówień
-    let orders = [];
-    if (fs.existsSync(ORDERS_FILE)) {
-      const fileData = fs.readFileSync(ORDERS_FILE);
-      if (fileData.length > 0) {
-        orders = JSON.parse(fileData);
-      }
-    }
-
-    // Dodanie nowego zamówienia do listy
-    orders.push(orderData);
-    saveOrders(orders);
-
-    console.log('Otrzymano nowe zamówienie:', orderData);
-    res.status(200).send('Webhook odebrany');
-  } catch (error) {
-    console.error('Błąd parsowania JSON:', error);
-    res.status(500).send('Błąd serwera');
-  }
-});
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Endpoint do pobierania zamówień z obsługą paginacji
 app.get('/api/orders', (req, res) => {
   let orders = [];
   if (fs.existsSync(ORDERS_FILE)) {
-    orders = JSON.parse(fs.readFileSync(ORDERS_FILE));
+    try {
+      // Odczytujemy zawartość pliku
+      const fileContent = fs.readFileSync(ORDERS_FILE, 'utf8').trim();
+
+      // Sprawdzamy, czy plik nie jest pusty
+      if (fileContent) {
+        orders = JSON.parse(fileContent);
+      } else {
+        console.warn('Plik zamówień jest pusty.');
+      }
+    } catch (error) {
+      console.error('Błąd przy odczytywaniu lub parsowaniu pliku zamówień:', error);
+      return res.status(500).json({ error: 'Błąd przy odczytywaniu pliku zamówień.' });
+    }
+  } else {
+    console.warn('Plik zamówień nie istnieje.');
   }
 
   // Obsługa paginacji
@@ -76,14 +49,40 @@ app.get('/api/orders', (req, res) => {
   });
 });
 
+// Endpoint do dodawania nowego zamówienia
+app.post('/api/orders', (req, res) => {
+  const newOrder = req.body;
+  let orders = [];
 
-// Endpoint testowy
-app.get('/api/test', (req, res) => {
-  res.send('Serwer działa poprawnie!');
+  if (fs.existsSync(ORDERS_FILE)) {
+    try {
+      const fileContent = fs.readFileSync(ORDERS_FILE, 'utf8').trim();
+      if (fileContent) {
+        orders = JSON.parse(fileContent);
+      }
+    } catch (error) {
+      console.error('Błąd przy odczytywaniu lub parsowaniu pliku zamówień:', error);
+      return res.status(500).json({ error: 'Błąd przy odczytywaniu pliku zamówień.' });
+    }
+  }
+
+  orders.push(newOrder);
+
+  try {
+    fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2));
+    res.status(201).json(newOrder);
+  } catch (error) {
+    console.error('Błąd przy zapisywaniu pliku zamówień:', error);
+    res.status(500).json({ error: 'Błąd przy zapisywaniu pliku zamówień.' });
+  }
 });
 
-// Uruchomienie serwera
-const PORT = process.env.PORT || 5000;
+// Obsługa błędów 404
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint nie został znaleziony.' });
+});
+
+// Start serwera
 app.listen(PORT, () => {
-  console.log(`Serwer działa na porcie ${PORT}`);
+  console.log(`Serwer uruchomiony na porcie ${PORT}`);
 });
