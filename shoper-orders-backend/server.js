@@ -55,22 +55,27 @@ app.post('/api/webhook/orders', (req, res) => {
   }
 });
 
-// Endpoint do pobierania zamówień
+// Endpoint do pobierania zamówień z obsługą paginacji
 app.get('/api/orders', (req, res) => {
-  try {
-    let orders = [];
-    if (fs.existsSync(ORDERS_FILE)) {
-      const fileData = fs.readFileSync(ORDERS_FILE);
-      if (fileData.length > 0) {
-        orders = JSON.parse(fileData);
-      }
-    }
-    res.json(orders);
-  } catch (error) {
-    console.error('Błąd przy pobieraniu zamówień:', error);
-    res.status(500).send('Błąd serwera');
+  let orders = [];
+  if (fs.existsSync(ORDERS_FILE)) {
+    orders = JSON.parse(fs.readFileSync(ORDERS_FILE));
   }
+
+  // Obsługa paginacji
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+
+  const paginatedOrders = orders.slice(startIndex, endIndex);
+
+  res.json({
+    total: orders.length,        // Całkowita liczba zamówień
+    orders: paginatedOrders      // Zamówienia na wybranej stronie
+  });
 });
+
 
 // Endpoint testowy
 app.get('/api/test', (req, res) => {
