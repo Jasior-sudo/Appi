@@ -10,7 +10,7 @@ const app = express();
 const supabase = createClient(
     "https://nymqqcobbzmnngkgxczc.supabase.co",
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55bXFxY29iYnptbm5na2d4Y3pjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA5Mjg2ODMsImV4cCI6MjA1NjUwNDY4M30.B6Qtv54EtqKae3SlZIgNwZM_EbQDxnjVYkXfaIoNq14",
-  );
+);
 
 // Middleware do obsługi CORS i parsowania JSON
 app.use(cors());
@@ -29,11 +29,7 @@ app.post('/api/webhook/orders', async (req, res) => {
         }
 
         const orderData = req.body;
-        const companyId = req.headers['company-id']; // Pobierz `company_id` z nagłówka
-
-        if (!companyId) {
-            return res.status(400).send('Brak `company_id` w nagłówkach');
-        }
+        const companyId = 1; // Zapisujemy tylko dla company_id = 1
 
         // 1️⃣ **Zapisujemy zamówienie do Supabase**
         const { error: orderError } = await supabase
@@ -153,36 +149,6 @@ app.post('/api/webhook/orders', async (req, res) => {
         console.error("❌ Błąd serwera:", error);
         res.status(500).send('Błąd serwera');
     }
-});
-
-// Endpoint do pobierania zamówień dla konkretnej firmy
-app.get('/api/orders', async (req, res) => {
-    try {
-        const companyId = req.headers['company-id'];
-        if (!companyId) {
-            return res.status(400).send('Brak `company_id` w nagłówkach');
-        }
-
-        const { data: orders, error } = await supabase
-            .from('orders')
-            .select('*')
-            .eq('company_id', companyId);
-
-        if (error) {
-            console.error("❌ Błąd pobierania zamówień:", error);
-            return res.status(500).send('Błąd serwera');
-        }
-
-        res.json(orders);
-    } catch (error) {
-        console.error("❌ Błąd serwera:", error);
-        res.status(500).send('Błąd serwera');
-    }
-});
-
-// Endpoint testowy
-app.get('/api/test', (req, res) => {
-    res.send('Serwer działa poprawnie!');
 });
 
 // Uruchomienie serwera
