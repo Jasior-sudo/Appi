@@ -152,7 +152,7 @@ app.post('/api/webhook/orders', async (req, res) => {
 });
 
 // Uruchomienie serwera
-const PORT = process.env.PORT || 5000;
+const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Serwer działa na porcie ${PORT}`);
 });
