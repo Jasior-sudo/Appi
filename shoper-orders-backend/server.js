@@ -12,12 +12,14 @@ const supabase = createClient(
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55bXFxY29iYnptbm5na2d4Y3pjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA5Mjg2ODMsImV4cCI6MjA1NjUwNDY4M30.B6Qtv54EtqKae3SlZIgNwZM_EbQDxnjVYkXfaIoNq14",
 );
 
-// Middleware do obsługi CORS i parsowania JSON
+// Middleware
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-const COMPANY_ID = 1; // Identyfikator firmy w bazie
+const COMPANY_ID = 1;
+const STATUS_PENDING = 10; // Oczekuje na płatność
+const STATUS_PAID = 11; // Opłacone
 
 // ✅ **1. Webhook do odbierania zamówień z Shopera**
 app.post('/api/webhook/orders', async (req, res) => {
@@ -29,17 +31,14 @@ app.post('/api/webhook/orders', async (req, res) => {
         }
 
         const orderData = req.body;
+        const isFullyPaid = orderData.paid >= orderData.sum;
 
-        // Odpowiadamy od razu (Shoper nie czeka na zapis do bazy)
+        // Odpowiadamy od razu
         res.status(200).send('✅ Webhook odebrany, zapis w toku');
 
-        // ⏳ Opóźniamy zapis zamówienia o 2 minuty
         setTimeout(async () => {
             try {
                 console.log(`⏳ Zapis zamówienia ${orderData.order_id}`);
-
-                // ✅ **Zapisujemy zamówienie**
-                const isFullyPaid = orderData.paid >= orderData.sum;
 
                 const { error: orderError } = await supabase
                     .from('orders')
@@ -53,8 +52,9 @@ app.post('/api/webhook/orders', async (req, res) => {
                             confirm_date: orderData.confirm_date !== "0000-00-00 00:00:00" ? orderData.confirm_date : null,
                             delivery_date: orderData.delivery_date !== "0000-00-00 00:00:00" ? orderData.delivery_date : null,
                             status_id: orderData.status_id,
-                            app_status_id: isFullyPaid ? 3 : 2, // 3 - Opłacone, 2 - Oczekujące
+                            app_status_id: isFullyPaid ? STATUS_PAID : STATUS_PENDING,
                             sum: orderData.sum,
+                            paid: orderData.paid, // ✅ Zapisujemy kwotę płatności
                             payment_id: orderData.payment_id,
                             shipping_id: orderData.shipping_id,
                             shipping_cost: orderData.shipping_cost,
@@ -114,7 +114,7 @@ app.post('/api/webhook/orders', async (req, res) => {
             } catch (error) {
                 console.error("❌ Błąd serwera przy zapisie zamówienia:", error);
             }
-        }, 120000); // Opóźnienie o 2 minuty
+        }, 120000);
 
     } catch (error) {
         console.error("❌ Błąd serwera:", error);
@@ -127,16 +127,15 @@ app.post('/api/webhook/payments', async (req, res) => {
     try {
         console.log('🔗 Otrzymano webhook płatności:', req.body);
 
-        if (!req.body || !req.body.order_id || !req.body.paid) {
+        if (!req.body || !req.body.order_id || req.body.paid === undefined) {
             return res.status(400).send('❌ Brak wymaganych danych');
         }
 
         const { order_id, paid } = req.body;
 
-        // Pobieramy zamówienie
         const { data: order, error: fetchError } = await supabase
             .from('orders')
-            .select('sum')
+            .select('sum, paid')
             .eq('order_id', order_id)
             .single();
 
@@ -147,12 +146,11 @@ app.post('/api/webhook/payments', async (req, res) => {
 
         const isFullyPaid = paid >= order.sum;
 
-        // Aktualizacja płatności w zamówieniu
         const { error: updateError } = await supabase
             .from('orders')
             .update({
-                paid: paid,
-                app_status_id: isFullyPaid ? 3 : 2 // 3 - Opłacone, 2 - Oczekujące
+                paid: paid, // ✅ Aktualizujemy kwotę płatności
+                app_status_id: isFullyPaid ? STATUS_PAID : STATUS_PENDING
             })
             .eq('order_id', order_id);
 
@@ -175,7 +173,7 @@ const checkPendingPayments = async () => {
         const { data: pendingOrders, error } = await supabase
             .from('orders')
             .select('order_id, sum, paid')
-            .eq('app_status_id', 2);
+            .eq('app_status_id', STATUS_PENDING);
 
         if (error) throw error;
 
@@ -185,7 +183,7 @@ const checkPendingPayments = async () => {
 
                 await supabase
                     .from('orders')
-                    .update({ app_status_id: 3 })
+                    .update({ app_status_id: STATUS_PAID })
                     .eq('order_id', order.order_id);
             }
         }
@@ -195,6 +193,7 @@ const checkPendingPayments = async () => {
         console.error("❌ Błąd sprawdzania płatności:", error);
     }
 };
+
 // ✅ **Uruchamianie sprawdzania płatności na starcie serwera**
 checkPendingPayments();
 
