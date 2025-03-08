@@ -112,6 +112,31 @@ checkPendingPayments();
 // 🔄 Uruchamiamy sprawdzanie co 15 minut
 setInterval(checkPendingPayments, 15 * 60 * 1000);
 
+
+// Endpoint do odbierania webhooków z Shoper
+app.post('/api/webhook/orders', async (req, res) => {
+    try {
+        console.log('🔗 Otrzymano webhook:', req.body);
+
+        if (!req.body || Object.keys(req.body).length === 0) {
+            return res.status(400).send('❌ Brak danych w żądaniu');
+        }
+
+        const orderData = req.body;
+        const companyId = 1; // Zapisujemy tylko dla tej firmy
+
+        // Odpowiadamy od razu (Shoper nie czeka na zapis do bazy)
+        res.status(200).send('✅ Webhook odebrany, zapis w toku');
+
+        // 🔥 Opóźniamy całą operację o 2 minuty
+        setTimeout(async () => {
+            try {
+                console.log(`⏳ Opóźniony zapis zamówienia ${orderData.order_id}`);
+
+               // Sprawdzenie, czy zamówienie jest opłacone
+const isPaid = parseFloat(orderData.paid) > 0;
+const newStatus = isPaid ? 10 : 11; // 10 jeśli opłacone, 11 jeśli nieopłacone
+
 // 🔥 Aktualizujemy zamówienie w Supabase
 const { error: orderError } = await supabase
     .from('orders')
@@ -226,7 +251,7 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
             }
         }, 120000); // ⏳ Opóźnienie o 2 minuty
 
-      } catch (error) {
+    } catch (error) {
         console.error("❌ Błąd serwera:", error);
         res.status(500).send('Błąd serwera');
     }
