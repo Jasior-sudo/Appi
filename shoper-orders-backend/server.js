@@ -38,54 +38,60 @@ app.post('/api/webhook/orders', async (req, res) => {
             try {
                 console.log(`⏳ Opóźniony zapis zamówienia ${orderData.order_id}`);
 
-                // 1️⃣ **Zapisujemy zamówienie**
-                const { error: orderError } = await supabase
-                    .from('orders')
-                    .upsert([
-                        {
-                            company_id: companyId,
-                            order_id: orderData.order_id,
-                            user_id: orderData.user_id,
-                            date: orderData.date !== "0000-00-00 00:00:00" ? orderData.date : null,
-                            status_date: orderData.status_date !== "0000-00-00 00:00:00" ? orderData.status_date : null,
-                            confirm_date: orderData.confirm_date !== "0000-00-00 00:00:00" ? orderData.confirm_date : null,
-                            delivery_date: orderData.delivery_date !== "0000-00-00 00:00:00" ? orderData.delivery_date : null,
-                            status_id: orderData.status_id,
-                            app_status_id: 2, // 🔥 Automatycznie "Nowe zamówienie"
-                            sum: orderData.sum,
-                            payment_id: orderData.payment_id,
-                            user_order: orderData.user_order,
-                            shipping_id: orderData.shipping_id,
-                            shipping_cost: orderData.shipping_cost,
-                            email: orderData.email,
-                            delivery_code: orderData.delivery_code,
-                            code: orderData.code,
-                            confirm: orderData.confirm === "1",
-                            notes: orderData.notes,
-                            currency_id: orderData.currency_id,
-                            currency_rate: orderData.currency_rate,
-                            paid: orderData.paid,
-                            ip_address: orderData.ip_address,
-                            discount_client: orderData.discount_client,
-                            discount_group: orderData.discount_group,
-                            discount_levels: orderData.discount_levels,
-                            discount_code: orderData.discount_code,
-                            shipping_vat: orderData.shipping_vat,
-                            shipping_vat_value: orderData.shipping_vat_value,
-                            shipping_vat_name: orderData.shipping_vat_name,
-                            lang_id: orderData.lang_id,
-                            origin: orderData.origin,
-                            parent_order_id: orderData.parent_order_id,
-                            registered: orderData.registered === "1",
-                            currency_name: orderData.currency_name,
-                            shipping_method: orderData.shipping?.name,
-                            shipping_pickup_point: orderData.shipping?.pickup_point,
-                            payment_method: orderData.payment?.title,
-                            status_name: orderData.status?.name
-                        }
-                    ]);
+               // Sprawdzenie, czy zamówienie jest opłacone
+const isPaid = parseFloat(orderData.paid) > 0;
+const newStatus = isPaid ? 10 : 11; // 10 jeśli opłacone, 11 jeśli nieopłacone
 
-                if (orderError) throw orderError;
+// 🔥 Aktualizujemy zamówienie w Supabase
+const { error: orderError } = await supabase
+    .from('orders')
+    .upsert([
+        {
+            company_id: companyId,
+            order_id: orderData.order_id,
+            user_id: orderData.user_id,
+            date: orderData.date !== "0000-00-00 00:00:00" ? orderData.date : null,
+            status_date: orderData.status_date !== "0000-00-00 00:00:00" ? orderData.status_date : null,
+            confirm_date: orderData.confirm_date !== "0000-00-00 00:00:00" ? orderData.confirm_date : null,
+            delivery_date: orderData.delivery_date !== "0000-00-00 00:00:00" ? orderData.delivery_date : null,
+            status_id: orderData.status_id,  // ORYGINALNY status
+            app_status_id: newStatus, // 🔥 Nowy status w zależności od płatności
+            sum: orderData.sum,
+            payment_id: orderData.payment_id,
+            user_order: orderData.user_order,
+            shipping_id: orderData.shipping_id,
+            shipping_cost: orderData.shipping_cost,
+            email: orderData.email,
+            delivery_code: orderData.delivery_code,
+            code: orderData.code,
+            confirm: orderData.confirm === "1",
+            notes: orderData.notes,
+            currency_id: orderData.currency_id,
+            currency_rate: orderData.currency_rate,
+            paid: orderData.paid,  // 🔄 Aktualizacja wartości "paid"
+            ip_address: orderData.ip_address,
+            discount_client: orderData.discount_client,
+            discount_group: orderData.discount_group,
+            discount_levels: orderData.discount_levels,
+            discount_code: orderData.discount_code,
+            shipping_vat: orderData.shipping_vat,
+            shipping_vat_value: orderData.shipping_vat_value,
+            shipping_vat_name: orderData.shipping_vat_name,
+            lang_id: orderData.lang_id,
+            origin: orderData.origin,
+            parent_order_id: orderData.parent_order_id,
+            registered: orderData.registered === "1",
+            currency_name: orderData.currency_name,
+            shipping_method: orderData.shipping?.name,
+            shipping_pickup_point: orderData.shipping?.pickup_point,
+            payment_method: orderData.payment?.title,
+            status_name: orderData.status?.name
+        }
+    ]);
+
+if (orderError) console.error(`❌ Błąd zapisu zamówienia ${orderData.order_id}:`, orderError);
+else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status ${newStatus}, paid: ${orderData.paid}`);
+
 
                 // 2️⃣ **Zapisujemy adresy (billing & delivery)**
                 for (const type of ["billing", "delivery"]) {
@@ -156,8 +162,61 @@ app.post('/api/webhook/orders', async (req, res) => {
     }
 });
 
+// 🔄 Funkcja sprawdzająca płatności co 4 dni
+const checkPendingPayments = async () => {
+  try {
+      console.log("🔍 Sprawdzanie nieopłaconych zamówień...");
+
+      // Pobieramy zamówienia ze statusem 11 (oczekujące na płatność)
+      const { data: orders, error } = await supabase
+          .from('orders')
+          .select('order_id, paid, app_status_id, date')
+          .eq('app_status_id', 11);
+
+      if (error) throw error;
+      if (!orders || orders.length === 0) {
+          console.log("✅ Brak zamówień do aktualizacji.");
+          return;
+      }
+
+      const updates = [];
+
+      for (const order of orders) {
+          const isPaid = parseFloat(order.paid) > 0;
+          const orderDate = new Date(order.date);
+          const now = new Date();
+          const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24)); // różnica w dniach
+
+          if (isPaid) {
+              console.log(`💰 Zamówienie ${order.order_id} opłacone! Aktualizacja do statusu 10.`);
+              updates.push({ order_id: order.order_id, app_status_id: 10 });
+          } else if (diffDays >= 4) {
+              console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Możesz anulować.`);
+              updates.push({ order_id: order.order_id, app_status_id: 12 }); // Możesz ustawić 12 na "Anulowane"
+          }
+      }
+
+      if (updates.length > 0) {
+          const { error: updateError } = await supabase
+              .from('orders')
+              .upsert(updates);
+
+          if (updateError) throw updateError;
+          console.log("✅ Zamówienia zostały zaktualizowane.");
+      }
+  } catch (error) {
+      console.error("❌ Błąd podczas aktualizacji zamówień:", error);
+  }
+};
+
+// 🔄 Jednorazowe sprawdzenie płatności przy starcie serwera
+checkPendingPayments();
+
+// 🔄 Uruchamiamy sprawdzanie co 24 godziny (raz dziennie)
+setInterval(checkPendingPayments, 15 * 60 * 1000); // Co 15 minut
+
 // Uruchomienie serwera
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`🚀 Serwer działa na porcie ${PORT}`);
+  console.log(`🚀 Serwer działa na porcie ${PORT}`);
 });
