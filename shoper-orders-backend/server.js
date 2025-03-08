@@ -162,18 +162,20 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
     }
 });
 
-// 🔄 Funkcja sprawdzająca płatności co 4 dni
 const checkPendingPayments = async () => {
-  try {
-      console.log("🔍 Sprawdzanie nieopłaconych zamówień...");
+  console.log(`🔄 Uruchomiono sprawdzanie płatności: ${new Date().toLocaleString()}`);
 
-      // Pobieramy zamówienia ze statusem 11 (oczekujące na płatność)
+  try {
+      console.log("🔍 Sprawdzanie WSZYSTKICH zamówień...");
+
+      // Pobieramy wszystkie zamówienia
       const { data: orders, error } = await supabase
           .from('orders')
-          .select('order_id, paid, app_status_id, date')
-          .eq('app_status_id', 11);
+          .select('order_id, paid, app_status_id, date');
 
       if (error) throw error;
+      console.log(`📊 Znaleziono zamówień do sprawdzenia: ${orders.length}`);
+
       if (!orders || orders.length === 0) {
           console.log("✅ Brak zamówień do aktualizacji.");
           return;
@@ -187,12 +189,12 @@ const checkPendingPayments = async () => {
           const now = new Date();
           const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24)); // różnica w dniach
 
-          if (isPaid) {
+          if (isPaid && order.app_status_id !== 10) {
               console.log(`💰 Zamówienie ${order.order_id} opłacone! Aktualizacja do statusu 10.`);
               updates.push({ order_id: order.order_id, app_status_id: 10 });
-          } else if (diffDays >= 4) {
-              console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Możesz anulować.`);
-              updates.push({ order_id: order.order_id, app_status_id: 12 }); // Możesz ustawić 12 na "Anulowane"
+          } else if (!isPaid && diffDays >= 4 && order.app_status_id !== 12) {
+              console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 12.`);
+              updates.push({ order_id: order.order_id, app_status_id: 12 });
           }
       }
 
@@ -203,6 +205,8 @@ const checkPendingPayments = async () => {
 
           if (updateError) throw updateError;
           console.log("✅ Zamówienia zostały zaktualizowane.");
+      } else {
+          console.log("✅ Brak zmian w statusach zamówień.");
       }
   } catch (error) {
       console.error("❌ Błąd podczas aktualizacji zamówień:", error);
@@ -212,8 +216,9 @@ const checkPendingPayments = async () => {
 // 🔄 Jednorazowe sprawdzenie płatności przy starcie serwera
 checkPendingPayments();
 
-// 🔄 Uruchamiamy sprawdzanie co 24 godziny (raz dziennie)
-setInterval(checkPendingPayments, 15 * 60 * 1000); // Co 15 minut
+// 🔄 Uruchamiamy sprawdzanie co 15 minut
+setInterval(checkPendingPayments, 15 * 60 * 1000);
+
 
 // Uruchomienie serwera
 const PORT = process.env.PORT || 5000;
