@@ -22,9 +22,12 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// 🔄 Pobieranie wartości `paid` z Shopera
-const updatePaidFromShoper = async (orderId) => {
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const updatePaidFromShoper = async (orderId, retries = 3) => {
     try {
+        console.log(`🔄 Pobieranie wartości paid dla zamówienia ${orderId}...`);
+        
         const response = await axios.get(`${SHOPER_API_URL}${orderId}`, {
             headers: {
                 "Authorization": `Bearer ${SHOPER_API_KEY}`,
@@ -36,75 +39,83 @@ const updatePaidFromShoper = async (orderId) => {
             return parseFloat(response.data.paid);
         }
     } catch (error) {
+        if (error.response && error.response.status === 429 && retries > 0) {
+            console.warn(`⏳ Zbyt wiele zapytań (429). Ponawiam próbę za 5 sekund...`);
+            await delay(5000);  // Czekamy 5 sekund
+            return updatePaidFromShoper(orderId, retries - 1); // Ponowna próba
+        }
+
         console.error(`❌ Błąd pobierania zamówienia ${orderId} z Shopera:`, error.message);
         return null;
     }
 };
 
-// 🔄 Sprawdzamy WSZYSTKIE zamówienia i aktualizujemy `paid`
+
 const checkPendingPayments = async () => {
-    console.log(`🔄 Uruchomiono sprawdzanie płatności: ${new Date().toLocaleString()}`);
+  console.log(`🔄 Uruchomiono sprawdzanie płatności: ${new Date().toLocaleString()}`);
 
-    try {
-        console.log("🔍 Sprawdzanie WSZYSTKICH zamówień...");
+  try {
+      console.log("🔍 Sprawdzanie WSZYSTKICH zamówień...");
 
-        // Pobieramy wszystkie zamówienia z Supabase
-        const { data: orders, error } = await supabase
-            .from('orders')
-            .select('order_id, paid, app_status_id, date');
+      const { data: orders, error } = await supabase
+          .from('orders')
+          .select('order_id, paid, app_status_id, date');
 
-        if (error) throw error;
-        console.log(`📊 Znaleziono zamówień do sprawdzenia: ${orders.length}`);
+      if (error) throw error;
+      console.log(`📊 Znaleziono zamówień do sprawdzenia: ${orders.length}`);
 
-        if (!orders || orders.length === 0) {
-            console.log("✅ Brak zamówień do aktualizacji.");
-            return;
-        }
+      if (!orders || orders.length === 0) {
+          console.log("✅ Brak zamówień do aktualizacji.");
+          return;
+      }
 
-        const updates = [];
+      const updates = [];
 
-        for (const order of orders) {
-            let isPaid = parseFloat(order.paid) > 0;
+      for (const order of orders) {
+          let isPaid = parseFloat(order.paid) > 0;
 
-            // Jeśli zamówienie ma `paid = 0`, pobierz nową kwotę z Shopera
-            if (!isPaid) {
-                console.log(`🔄 Pobieranie nowej wartości paid dla zamówienia ${order.order_id}...`);
-                const newPaid = await updatePaidFromShoper(order.order_id);
-                
-                if (newPaid !== null && newPaid !== order.paid) {
-                    console.log(`💰 Zaktualizowano paid dla ${order.order_id}: ${newPaid}`);
-                    order.paid = newPaid;
-                    isPaid = newPaid > 0;
-                }
-            }
+          if (!isPaid) {
+              console.log(`🔄 Pobieranie nowej wartości paid dla zamówienia ${order.order_id}...`);
+              const newPaid = await updatePaidFromShoper(order.order_id);
+              
+              if (newPaid !== null && newPaid !== order.paid) {
+                  console.log(`💰 Zaktualizowano paid dla ${order.order_id}: ${newPaid}`);
+                  order.paid = newPaid;
+                  isPaid = newPaid > 0;
+              }
+          }
 
-            const orderDate = new Date(order.date);
-            const now = new Date();
-            const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24)); // różnica w dniach
+          const orderDate = new Date(order.date);
+          const now = new Date();
+          const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24));
 
-            if (isPaid && order.app_status_id !== 10) {
-                console.log(`✅ Zamówienie ${order.order_id} opłacone! Aktualizacja statusu na 10.`);
-                updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 10 });
-            } else if (!isPaid && diffDays >= 4 && order.app_status_id !== 12) {
-                console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 12.`);
-                updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 12 });
-            }
-        }
+          if (isPaid && order.app_status_id !== 10) {
+              console.log(`✅ Zamówienie ${order.order_id} opłacone! Aktualizacja statusu na 10.`);
+              updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 10 });
+          } else if (!isPaid && diffDays >= 4 && order.app_status_id !== 12) {
+              console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 12.`);
+              updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 12 });
+          }
 
-        if (updates.length > 0) {
-            const { error: updateError } = await supabase
-                .from('orders')
-                .upsert(updates);
+          // 🔴 Opóźnienie 1 sekunda między zapytaniami do API Shopera
+          await delay(1000);
+      }
 
-            if (updateError) throw updateError;
-            console.log("✅ Zamówienia zostały zaktualizowane.");
-        } else {
-            console.log("✅ Brak zmian w statusach zamówień.");
-        }
-    } catch (error) {
-        console.error("❌ Błąd podczas aktualizacji zamówień:", error);
-    }
+      if (updates.length > 0) {
+          const { error: updateError } = await supabase
+              .from('orders')
+              .upsert(updates);
+
+          if (updateError) throw updateError;
+          console.log("✅ Zamówienia zostały zaktualizowane.");
+      } else {
+          console.log("✅ Brak zmian w statusach zamówień.");
+      }
+  } catch (error) {
+      console.error("❌ Błąd podczas aktualizacji zamówień:", error);
+  }
 };
+
 
 // 🔄 Jednorazowe sprawdzenie płatności przy starcie serwera
 checkPendingPayments();
