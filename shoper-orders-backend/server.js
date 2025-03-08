@@ -204,8 +204,10 @@ const { error: orderError } = await supabase
             shipping_pickup_point: orderData.shipping?.pickup_point,
             payment_method: orderData.payment?.title,
             status_name: orderData.status?.name
-        }
-    ]{ onConflict: ['order_id', 'type'] }); // 🔥 Unikamy duplikatów);
+          }
+        ],
+        { onConflict: ['order_id', 'type'] } // 🔥 Unikamy duplikatów
+    );
 
 if (orderError) console.error(`❌ Błąd zapisu zamówienia ${orderData.order_id}:`, orderError);
 else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status ${newStatus}, paid: ${orderData.paid}`);
@@ -235,9 +237,10 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
                                     country: addressData.country,
                                     phone: addressData.phone,
                                     country_code: addressData.country_code
-                                }
-                            ]{ onConflict: ['order_id', 'type'] }); // 🔥 Unikamy duplikatów);
-
+                                  }
+                                ],
+                                { onConflict: ['order_id', 'type'] } // 🔥 Unikamy duplikatów
+                            );
                         if (addressError) console.error(`❌ Błąd zapisu adresu (${type}):`, addressError);
                     }
                 }
@@ -262,8 +265,10 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
                                 tax_value: product.tax_value,
                                 unit: product.unit,
                                 weight: product.weight
-                            }
-                        ]{ onConflict: ['order_id', 'product_id'] }); // 🔥 Unikamy duplikatów);
+                              }
+                            ],
+                            { onConflict: ['order_id', 'type'] } // 🔥 Unikamy duplikatów
+                        );
 
                     if (productError) console.error(`❌ Błąd zapisu produktu ${product.product_id}:`, productError);
                 }
