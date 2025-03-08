@@ -1,16 +1,20 @@
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
 
-// Konfiguracja Supabase
+// 🔄 Konfiguracja Shopera
+const SHOPER_API_URL = "https://sklep796316.shoparena.pl/webapi/rest/orders/";
+const SHOPER_API_KEY = "b90b616295d24b1f5187c41ec6223d96cbe57c6f"; // <-- Wpisz swój klucz API
+
+// 🔄 Konfiguracja Supabase
 const supabase = createClient(
-    "https://nymqqcobbzmnngkgxczc.supabase.co",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55bXFxY29iYnptbm5na2d4Y3pjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA5Mjg2ODMsImV4cCI6MjA1NjUwNDY4M30.B6Qtv54EtqKae3SlZIgNwZM_EbQDxnjVYkXfaIoNq14",
+  "https://nymqqcobbzmnngkgxczc.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55bXFxY29iYnptbm5na2d4Y3pjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA5Mjg2ODMsImV4cCI6MjA1NjUwNDY4M30.B6Qtv54EtqKae3SlZIgNwZM_EbQDxnjVYkXfaIoNq14"
 );
 
 // Middleware do obsługi CORS i parsowania JSON
@@ -18,29 +22,95 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Endpoint do odbierania webhooków z Shoper
-app.post('/api/webhook/orders', async (req, res) => {
+// 🔄 Pobieranie wartości `paid` z Shopera
+const updatePaidFromShoper = async (orderId) => {
     try {
-        console.log('🔗 Otrzymano webhook:', req.body);
+        const response = await axios.get(`${SHOPER_API_URL}${orderId}`, {
+            headers: {
+                "Authorization": `Bearer ${SHOPER_API_KEY}`,
+                "Content-Type": "application/json"
+            }
+        });
 
-        if (!req.body || Object.keys(req.body).length === 0) {
-            return res.status(400).send('❌ Brak danych w żądaniu');
+        if (response.data && response.data.paid !== undefined) {
+            return parseFloat(response.data.paid);
+        }
+    } catch (error) {
+        console.error(`❌ Błąd pobierania zamówienia ${orderId} z Shopera:`, error.message);
+        return null;
+    }
+};
+
+// 🔄 Sprawdzamy WSZYSTKIE zamówienia i aktualizujemy `paid`
+const checkPendingPayments = async () => {
+    console.log(`🔄 Uruchomiono sprawdzanie płatności: ${new Date().toLocaleString()}`);
+
+    try {
+        console.log("🔍 Sprawdzanie WSZYSTKICH zamówień...");
+
+        // Pobieramy wszystkie zamówienia z Supabase
+        const { data: orders, error } = await supabase
+            .from('orders')
+            .select('order_id, paid, app_status_id, date');
+
+        if (error) throw error;
+        console.log(`📊 Znaleziono zamówień do sprawdzenia: ${orders.length}`);
+
+        if (!orders || orders.length === 0) {
+            console.log("✅ Brak zamówień do aktualizacji.");
+            return;
         }
 
-        const orderData = req.body;
-        const companyId = 1; // Zapisujemy tylko dla tej firmy
+        const updates = [];
 
-        // Odpowiadamy od razu (Shoper nie czeka na zapis do bazy)
-        res.status(200).send('✅ Webhook odebrany, zapis w toku');
+        for (const order of orders) {
+            let isPaid = parseFloat(order.paid) > 0;
 
-        // 🔥 Opóźniamy całą operację o 2 minuty
-        setTimeout(async () => {
-            try {
-                console.log(`⏳ Opóźniony zapis zamówienia ${orderData.order_id}`);
+            // Jeśli zamówienie ma `paid = 0`, pobierz nową kwotę z Shopera
+            if (!isPaid) {
+                console.log(`🔄 Pobieranie nowej wartości paid dla zamówienia ${order.order_id}...`);
+                const newPaid = await updatePaidFromShoper(order.order_id);
+                
+                if (newPaid !== null && newPaid !== order.paid) {
+                    console.log(`💰 Zaktualizowano paid dla ${order.order_id}: ${newPaid}`);
+                    order.paid = newPaid;
+                    isPaid = newPaid > 0;
+                }
+            }
 
-               // Sprawdzenie, czy zamówienie jest opłacone
-const isPaid = parseFloat(orderData.paid) > 0;
-const newStatus = isPaid ? 10 : 11; // 10 jeśli opłacone, 11 jeśli nieopłacone
+            const orderDate = new Date(order.date);
+            const now = new Date();
+            const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24)); // różnica w dniach
+
+            if (isPaid && order.app_status_id !== 10) {
+                console.log(`✅ Zamówienie ${order.order_id} opłacone! Aktualizacja statusu na 10.`);
+                updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 10 });
+            } else if (!isPaid && diffDays >= 4 && order.app_status_id !== 12) {
+                console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 12.`);
+                updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 12 });
+            }
+        }
+
+        if (updates.length > 0) {
+            const { error: updateError } = await supabase
+                .from('orders')
+                .upsert(updates);
+
+            if (updateError) throw updateError;
+            console.log("✅ Zamówienia zostały zaktualizowane.");
+        } else {
+            console.log("✅ Brak zmian w statusach zamówień.");
+        }
+    } catch (error) {
+        console.error("❌ Błąd podczas aktualizacji zamówień:", error);
+    }
+};
+
+// 🔄 Jednorazowe sprawdzenie płatności przy starcie serwera
+checkPendingPayments();
+
+// 🔄 Uruchamiamy sprawdzanie co 15 minut
+setInterval(checkPendingPayments, 15 * 60 * 1000);
 
 // 🔥 Aktualizujemy zamówienie w Supabase
 const { error: orderError } = await supabase
@@ -156,72 +226,14 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
             }
         }, 120000); // ⏳ Opóźnienie o 2 minuty
 
-    } catch (error) {
+      } catch (error) {
         console.error("❌ Błąd serwera:", error);
         res.status(500).send('Błąd serwera');
     }
 });
 
-const checkPendingPayments = async () => {
-  console.log(`🔄 Uruchomiono sprawdzanie płatności: ${new Date().toLocaleString()}`);
-
-  try {
-      console.log("🔍 Sprawdzanie WSZYSTKICH zamówień...");
-
-      // Pobieramy wszystkie zamówienia
-      const { data: orders, error } = await supabase
-          .from('orders')
-          .select('order_id, paid, app_status_id, date');
-
-      if (error) throw error;
-      console.log(`📊 Znaleziono zamówień do sprawdzenia: ${orders.length}`);
-
-      if (!orders || orders.length === 0) {
-          console.log("✅ Brak zamówień do aktualizacji.");
-          return;
-      }
-
-      const updates = [];
-
-      for (const order of orders) {
-          const isPaid = parseFloat(order.paid) > 0;
-          const orderDate = new Date(order.date);
-          const now = new Date();
-          const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24)); // różnica w dniach
-
-          if (isPaid && order.app_status_id !== 10) {
-              console.log(`💰 Zamówienie ${order.order_id} opłacone! Aktualizacja do statusu 10.`);
-              updates.push({ order_id: order.order_id, app_status_id: 10 });
-          } else if (!isPaid && diffDays >= 4 && order.app_status_id !== 12) {
-              console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 12.`);
-              updates.push({ order_id: order.order_id, app_status_id: 12 });
-          }
-      }
-
-      if (updates.length > 0) {
-          const { error: updateError } = await supabase
-              .from('orders')
-              .upsert(updates);
-
-          if (updateError) throw updateError;
-          console.log("✅ Zamówienia zostały zaktualizowane.");
-      } else {
-          console.log("✅ Brak zmian w statusach zamówień.");
-      }
-  } catch (error) {
-      console.error("❌ Błąd podczas aktualizacji zamówień:", error);
-  }
-};
-
-// 🔄 Jednorazowe sprawdzenie płatności przy starcie serwera
-checkPendingPayments();
-
-// 🔄 Uruchamiamy sprawdzanie co 15 minut
-setInterval(checkPendingPayments, 15 * 60 * 1000);
-
-
-// Uruchomienie serwera
+// 🟢 Uruchomienie serwera
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Serwer działa na porcie ${PORT}`);
+    console.log(`🚀 Serwer działa na porcie ${PORT}`);
 });
