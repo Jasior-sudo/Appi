@@ -195,7 +195,10 @@ const checkPendingPayments = async () => {
         console.error("❌ Błąd sprawdzania płatności:", error);
     }
 };
+// ✅ **Uruchamianie sprawdzania płatności na starcie serwera**
+checkPendingPayments();
 
+// ✅ **Uruchamianie sprawdzania płatności co 24h**
 setInterval(checkPendingPayments, 24 * 60 * 60 * 1000);
 
 // ✅ **Uruchomienie serwera**
