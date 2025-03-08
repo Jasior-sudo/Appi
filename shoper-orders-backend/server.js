@@ -72,35 +72,47 @@ const checkPendingPayments = async () => {
       const updates = [];
 
       for (const order of orders) {
-          let isPaid = parseFloat(order.paid) > 0;
-
-          if (!isPaid) {
-              console.log(`🔄 Pobieranie nowej wartości paid dla zamówienia ${order.order_id}...`);
-              const newPaid = await updatePaidFromShoper(order.order_id);
-              
-              if (newPaid !== null && newPaid !== order.paid) {
-                  console.log(`💰 Zaktualizowano paid dla ${order.order_id}: ${newPaid}`);
-                  order.paid = newPaid;
-                  isPaid = newPaid > 0;
-              }
-          }
-
-          const orderDate = new Date(order.date);
-          const now = new Date();
-          const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24));
-
-          if (isPaid && order.app_status_id !== 10) {
-              console.log(`✅ Zamówienie ${order.order_id} opłacone! Aktualizacja statusu na 10.`);
-              updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 10 });
-          } else if (!isPaid && diffDays >= 4 && order.app_status_id !== 12) {
-              console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 12.`);
-              updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 12 });
-          }
-
-          // 🔴 Opóźnienie 1 sekunda między zapytaniami do API Shopera
-          await delay(1000);
-      }
-
+        let isPaid = parseFloat(order.paid) > 0;
+    
+        // Jeśli zamówienie ma `paid = 0`, pobierz nową kwotę z Shopera
+        if (!isPaid) {
+            console.log(`🔄 Pobieranie nowej wartości paid dla zamówienia ${order.order_id}...`);
+            const newPaid = await updatePaidFromShoper(order.order_id);
+            
+            if (newPaid !== null && newPaid !== order.paid) {
+                console.log(`💰 Zaktualizowano paid dla ${order.order_id}: ${newPaid}`);
+                order.paid = newPaid;
+                isPaid = newPaid > 0;
+            }
+        }
+    
+        const orderDate = new Date(order.date);
+        const now = new Date();
+        const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24)); // różnica w dniach
+    
+        // ✅ Pomijamy aktualizację, jeśli zamówienie jest już finalnie opłacone lub anulowane
+        if ((order.app_status_id === 10 && isPaid) || (order.app_status_id === 5 && !isPaid)) {
+            console.log(`🔹 Pominięto zamówienie ${order.order_id} (już opłacone lub anulowane).`);
+            continue; // ⏭️ Przechodzimy do kolejnego zamówienia
+        }
+    
+        // 🔄 Poprawiona logika zmiany statusów
+        if (isPaid) {
+            console.log(`✅ Zamówienie ${order.order_id} opłacone! Aktualizacja statusu na 10.`);
+            updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 10 });
+        } else if (!isPaid && diffDays >= 4) {
+            console.log(`⏳ Zamówienie ${order.order_id} nadal nieopłacone po 4 dniach. Zmieniam status na 5 (Anulowane).`);
+            updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 5 });
+        } else {
+            console.log(`🟡 Zamówienie ${order.order_id} jest nieopłacone. Aktualizacja statusu na 10.`);
+            updates.push({ order_id: order.order_id, paid: order.paid, app_status_id: 10 });
+        }
+    
+        // 🔴 Opóźnienie 1 sekunda między zapytaniami do API Shopera (zapobiega 429 Rate Limit)
+        await delay(1000);
+    }
+    
+    
       if (updates.length > 0) {
           const { error: updateError } = await supabase
               .from('orders')
@@ -193,7 +205,7 @@ const { error: orderError } = await supabase
             payment_method: orderData.payment?.title,
             status_name: orderData.status?.name
         }
-    ]);
+    ]{ onConflict: ['order_id', 'type'] }); // 🔥 Unikamy duplikatów);
 
 if (orderError) console.error(`❌ Błąd zapisu zamówienia ${orderData.order_id}:`, orderError);
 else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status ${newStatus}, paid: ${orderData.paid}`);
@@ -224,7 +236,7 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
                                     phone: addressData.phone,
                                     country_code: addressData.country_code
                                 }
-                            ]);
+                            ]{ onConflict: ['order_id', 'type'] }); // 🔥 Unikamy duplikatów);
 
                         if (addressError) console.error(`❌ Błąd zapisu adresu (${type}):`, addressError);
                     }
@@ -251,7 +263,7 @@ else console.log(`✅ Zamówienie ${orderData.order_id} zaktualizowane: status $
                                 unit: product.unit,
                                 weight: product.weight
                             }
-                        ]);
+                        ]{ onConflict: ['order_id', 'product_id'] }); // 🔥 Unikamy duplikatów);
 
                     if (productError) console.error(`❌ Błąd zapisu produktu ${product.product_id}:`, productError);
                 }
